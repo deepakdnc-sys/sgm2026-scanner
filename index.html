@@ -1,0 +1,508 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>SGM 2026 Entry Scanner</title>
+
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding: 16px;
+      background: #100b11;
+      color: #fff4df;
+      font-family: Arial, sans-serif;
+    }
+
+    .card {
+      max-width: 500px;
+      margin: auto;
+      padding: 20px;
+      border-radius: 18px;
+      background: #231922;
+      border: 1px solid #71512c;
+    }
+
+    h1 { color: #ffda85; font-size: 23px; }
+    h3 { color: #ffda85; }
+
+    .hint {
+      font-size: 13px;
+      line-height: 1.6;
+      color: #c9b7c7;
+    }
+
+    label {
+      display: block;
+      margin: 16px 0 7px;
+      font-size: 13px;
+    }
+
+    input, select, button {
+      display: block;
+      width: 100%;
+      padding: 13px;
+      border-radius: 9px;
+      font-size: 15px;
+    }
+
+    input, select {
+      color: white;
+      background: #130f14;
+      border: 1px solid #654d5d;
+    }
+
+    button {
+      margin-top: 12px;
+      border: 0;
+      background: #e9c064;
+      color: #281607;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    button.secondary {
+      background: #493443;
+      color: #fff4df;
+      border: 1px solid #80637b;
+    }
+
+    button:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+    }
+
+    #reader {
+      width: 100%;
+      margin-top: 16px;
+      overflow: hidden;
+      border-radius: 10px;
+    }
+
+    #result {
+      margin-top: 16px;
+      padding: 14px;
+      background: #382b22;
+      border-radius: 9px;
+      white-space: pre-line;
+      overflow-wrap: anywhere;
+      line-height: 1.5;
+    }
+
+    .good { color: #91ffb3; }
+    .bad { color: #ff9c9c; }
+
+    .divider {
+      border: 0;
+      border-top: 1px solid #654d5d;
+      margin-top: 22px;
+    }
+
+    #imageFile { display: none; }
+  </style>
+</head>
+
+<body>
+<div class="card">
+  <h1>✦ SGM 2026 ENTRY SCANNER</h1>
+
+  <p class="hint">
+    Swarnkar Garba Mahotsav 2026<br>
+    Authorized event staff only.
+  </p>
+
+  <label>STAFF PASSWORD</label>
+  <input
+    id="password"
+    type="password"
+    placeholder="Enter staff password"
+    autocomplete="current-password"
+  >
+
+  <button id="loginBtn" onclick="loginStaff()">
+    STAFF LOGIN
+  </button>
+
+  <p id="sessionInfo" class="hint">Staff not logged in.</p>
+
+  <hr class="divider">
+
+  <div id="reader"></div>
+
+  <button id="startBtn" onclick="startCamera()" disabled>
+    START LIVE CAMERA SCANNER
+  </button>
+
+  <button class="secondary" onclick="stopCamera()">
+    STOP CAMERA
+  </button>
+
+  <label>QR TOKEN (MANUAL ENTRY)</label>
+  <input id="token" placeholder="Scan QR or enter token">
+
+  <hr class="divider">
+
+  <h3>Scan from a saved image</h3>
+  <p class="hint">
+    If the camera does not work, choose a clear QR screenshot.
+  </p>
+
+  <input
+    id="imageFile"
+    type="file"
+    accept="image/*"
+    onchange="scanImage(this)"
+  >
+
+  <button class="secondary" onclick="chooseImage()">
+    SELECT QR IMAGE
+  </button>
+
+  <label>NUMBER OF PEOPLE ENTERING NOW</label>
+  <select id="count">
+    <option value="1">1 person</option>
+    <option value="2">2 people</option>
+    <option value="3">3 people</option>
+    <option value="4">4 people</option>
+  </select>
+
+  <button id="redeemBtn" onclick="redeem()" disabled>
+    VALIDATE QR &amp; CONFIRM ENTRY
+  </button>
+
+  <div id="result">Please log in to begin.</div>
+
+  <p class="hint">
+    Only approved bookings can be admitted. Each booking allows
+    a maximum of four entries in total. Verify the displayed
+    result before allowing entry.
+  </p>
+</div>
+
+<script>
+  // IMPORTANT: replace with your actual deployed /exec URL.
+  const API_URL =
+    "PASTE_YOUR_WEB_APP_EXEC_URL_HERE";
+
+  let sessionToken = "";
+  let sessionExpiry = 0;
+  let scanner = null;
+  let cameraStarting = false;
+  let requestNumber = 0;
+  let requestBusy = false;
+
+  function show(message, good) {
+    const box = document.getElementById("result");
+    box.textContent = message;
+    box.className = good ? "good" : "bad";
+  }
+
+  function sessionValid() {
+    return !!sessionToken && Date.now() < sessionExpiry;
+  }
+
+  function updateButtons() {
+    const valid = sessionValid();
+    document.getElementById("startBtn").disabled = !valid;
+    document.getElementById("redeemBtn").disabled =
+      !valid || requestBusy;
+  }
+
+  // JSONP is used because a direct cross-origin fetch to Apps
+  // Script generally cannot read its response due to CORS.
+  function apiRequest(params) {
+    return new Promise(function(resolve, reject) {
+      const callback =
+        "sgmCallback" + (++requestNumber);
+
+      const script = document.createElement("script");
+      const query = new URLSearchParams(params);
+
+      query.set("callback", callback);
+      query.set("_", String(Date.now()));
+
+      let finished = false;
+
+      const timeout = setTimeout(function() {
+        finish(new Error(
+          "Server response timed out. Check deployment and internet."
+        ));
+      }, 20000);
+
+      function finish(error, data) {
+        if (finished) return;
+        finished = true;
+
+        clearTimeout(timeout);
+        delete window[callback];
+        script.remove();
+
+        if (error) reject(error);
+        else resolve(data);
+      }
+
+      window[callback] = function(data) {
+        finish(null, data);
+      };
+
+      script.onerror = function() {
+        finish(new Error(
+          "Could not contact Apps Script. Check the /exec URL, " +
+          "deployment access, and internet connection."
+        ));
+      };
+
+      script.src = API_URL + "?" + query.toString();
+      document.body.appendChild(script);
+    });
+  }
+
+  async function loginStaff() {
+    if (API_URL.indexOf("PASTE_YOUR") !== -1) {
+      show("Set your deployed Apps Script URL in index.html first.", false);
+      return;
+    }
+
+    const password =
+      document.getElementById("password").value;
+
+    if (!password) {
+      show("Enter the staff password.", false);
+      return;
+    }
+
+    const btn = document.getElementById("loginBtn");
+    btn.disabled = true;
+    show("Checking staff credentials...", true);
+
+    try {
+      const r = await apiRequest({
+        api: "login",
+        password: password
+      });
+
+      if (!r || !r.ok || !r.session) {
+        throw new Error(r && r.message
+          ? r.message
+          : "Staff login failed.");
+      }
+
+      sessionToken = r.session;
+      sessionExpiry = Date.now() +
+        (Number(r.expiresIn || 600) * 1000);
+
+      document.getElementById("password").value = "";
+
+      document.getElementById("sessionInfo").textContent =
+        "Staff logged in. Session expires in about 10 minutes.";
+
+      show("Staff login successful. You can now scan passes.", true);
+      updateButtons();
+
+    } catch (e) {
+      sessionToken = "";
+      sessionExpiry = 0;
+      updateButtons();
+      show("LOGIN FAILED\n" + e.message, false);
+
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function getScanner() {
+    if (typeof Html5Qrcode === "undefined") {
+      throw new Error(
+        "QR library did not load. Check your internet connection."
+      );
+    }
+
+    if (!scanner) {
+      scanner = new Html5Qrcode("reader");
+    }
+
+    return scanner;
+  }
+
+  async function startCamera() {
+    if (!sessionValid()) {
+      show("Your staff session expired. Please log in again.", false);
+      updateButtons();
+      return;
+    }
+
+    if (cameraStarting) return;
+    cameraStarting = true;
+
+    try {
+      const qr = getScanner();
+
+      if (qr.isScanning) {
+        show("Camera is already running.", true);
+        return;
+      }
+
+      show("Requesting camera permission...", true);
+
+      await qr.start(
+        { facingMode: "environment" },
+        {
+          fps: 10,
+          qrbox: { width: 240, height: 240 },
+          aspectRatio: 1
+        },
+        function(decodedText) {
+          document.getElementById("token").value =
+            decodedText.trim();
+
+          show(
+            "QR DETECTED.\nCheck the number of people, then confirm entry.",
+            true
+          );
+
+          stopCamera();
+        },
+        function() {}
+      );
+
+      show("Camera active. Point it at the pass QR code.", true);
+
+    } catch (e) {
+      show(
+        "CAMERA ERROR\n" +
+        (e.message || String(e)) +
+        "\n\nAllow camera access in Chrome site settings. " +
+        "If needed, use SELECT QR IMAGE.",
+        false
+      );
+
+    } finally {
+      cameraStarting = false;
+    }
+  }
+
+  async function stopCamera() {
+    if (!scanner) return;
+
+    try {
+      if (scanner.isScanning) {
+        await scanner.stop();
+      }
+    } catch (e) {}
+  }
+
+  function chooseImage() {
+    if (!sessionValid()) {
+      show("Log in before scanning a QR image.", false);
+      return;
+    }
+
+    document.getElementById("imageFile").click();
+  }
+
+  async function scanImage(input) {
+    const file = input.files && input.files[0];
+    if (!file) return;
+
+    try {
+      const qr = getScanner();
+
+      if (qr.isScanning) await qr.stop();
+
+      show("Reading QR image...", true);
+
+      const decoded = await qr.scanFile(file, true);
+
+      document.getElementById("token").value = decoded.trim();
+      show("QR image read. Confirm the entry when ready.", true);
+
+    } catch (e) {
+      show(
+        "IMAGE SCAN FAILED\n" +
+        (e.message || String(e)),
+        false
+      );
+
+    } finally {
+      input.value = "";
+    }
+  }
+
+  async function redeem() {
+    if (!sessionValid()) {
+      show("Staff session expired. Log in again.", false);
+      updateButtons();
+      return;
+    }
+
+    if (requestBusy) return;
+
+    const token =
+      document.getElementById("token").value.trim();
+
+    const count = Number(
+      document.getElementById("count").value
+    );
+
+    if (!token) {
+      show("Scan a QR code or enter the token.", false);
+      return;
+    }
+
+    if (![1, 2, 3, 4].includes(count)) {
+      show("Choose between 1 and 4 people.", false);
+      return;
+    }
+
+    if (!confirm(
+      "Confirm entry for " + count +
+      " person(s)?\nThis action records entry in the database."
+    )) return;
+
+    requestBusy = true;
+    updateButtons();
+    show("Verifying approval and remaining entries...", true);
+
+    try {
+      const r = await apiRequest({
+        api: "redeem",
+        session: sessionToken,
+        token: token,
+        count: String(count)
+      });
+
+      if (!r || !r.ok) {
+        throw new Error(r && r.message
+          ? r.message
+          : "Entry denied.");
+      }
+
+      show(
+        "✓ " + r.message +
+        "\nBooking: " + r.bookingId +
+        "\nName: " + r.name +
+        "\nAllowed: " + r.allowed +
+        "\nTotal entered: " + r.entered +
+        "\nRemaining: " + r.remaining,
+        true
+      );
+
+      document.getElementById("token").value = "";
+
+    } catch (e) {
+      show("✕ ENTRY NOT CONFIRMED\n" + e.message, false);
+
+    } finally {
+      requestBusy = false;
+      updateButtons();
+    }
+  }
+</script>
+</body>
+</html>
