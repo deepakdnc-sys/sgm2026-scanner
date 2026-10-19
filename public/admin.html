@@ -1,0 +1,70 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Admin - Swarnkar Garba Mahotsav 2026</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="hero">
+    <h1>Admin Panel</h1>
+  </header>
+  <main class="container">
+    <section class="card">
+      <h2>Login (password is ADMIN)</h2>
+      <form id="adminLogin">
+        <label>Password<br><input name="password" type="password"></label>
+        <button>Login</button>
+      </form>
+      <div id="adminMsg"></div>
+    </section>
+
+    <section class="card" id="adminArea" style="display:none">
+      <div class="admin-links">
+        <button onclick="refreshList()">Refresh</button>
+        <button onclick="logout()">Logout</button>
+      </div>
+      <h3>Bookings</h3>
+      <div id="list"></div>
+      <h3>Create quick gate pass</h3>
+      <form id="quickForm">
+        <label>Name<br><input name="name"></label>
+        <label>Mobile<br><input name="mobile"></label>
+        <button>Create Active QR</button>
+      </form>
+    </section>
+  </main>
+  <script>
+    document.getElementById('adminLogin').addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const pw = e.target.password.value;
+      const res = await fetch('/api/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})});
+      if (res.ok){ document.getElementById('adminArea').style.display='block'; document.getElementById('adminMsg').textContent='Logged in'; refreshList(); }
+      else document.getElementById('adminMsg').textContent='Invalid';
+    });
+
+    async function refreshList(){
+      const res = await fetch('/api/admin/list');
+      if (!res.ok) { alert('Unauthorized'); return; }
+      const rows = await res.json();
+      const container = document.getElementById('list'); container.innerHTML='';
+      rows.forEach(r=>{
+        const div = document.createElement('div'); div.className='card small';
+        div.innerHTML = `<strong>${r.name||'(no name)'} ${r.mobile?'- '+r.mobile:''}</strong><br>UTR: ${r.utr||''} <br>Status: ${r.status} <br>Entries used: ${r.entries_used}/${r.max_entries} <br> <a href='${r.screenshot_url||"#"}' target='_blank'>Screenshot</a> <br> <button onclick="approve('${r.id}')">Approve</button> <button onclick="disable('${r.id}')">Disable</button> <button onclick="del('${r.id}')">Delete</button> <button onclick="download('${r.id}')">Download</button>`;
+        container.appendChild(div);
+      });
+    }
+    async function approve(id){ await fetch('/api/admin/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})}); refreshList(); }
+    async function disable(id){ await fetch('/api/admin/disable',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})}); refreshList(); }
+    async function del(id){ if (!confirm('Delete?')) return; await fetch('/api/admin/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})}); refreshList(); }
+    async function download(id){ const r = await fetch('/api/ticket/'+id+'/download'); const j = await r.json(); const w = window.open('about:blank'); w.document.write(`<h2>Ticket</h2><p>${j.ticket.name}</p><img src="${j.ticket.qr}">`); }
+    async function logout(){ await fetch('/api/admin/logout',{method:'POST'}); document.getElementById('adminArea').style.display='none'; document.getElementById('adminMsg').textContent='Logged out'; }
+    document.getElementById('quickForm').addEventListener('submit', async (e)=>{
+      e.preventDefault(); const f = e.target; const name = f.name.value; const mobile = f.mobile.value;
+      const res = await fetch('/api/admin/create-quick',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,mobile})});
+      const j = await res.json(); if (j.ok) { alert('Created: '+j.id); refreshList(); }
+    });
+  </script>
+</body>
+</html>
